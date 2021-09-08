@@ -26,34 +26,50 @@ const Yaml: Plugin = (jsonic: Jsonic, options: YamlOptions) => {
   jsonic.options({
     fixed: {
       token: {
+        // Single colon is not a YAML token, so remove.
         '#CL': null,
+
+        // Element prefix and separator.
+        // TODO: should be '- '
         '#EL': '-',
       }
     },
+
+    // Colons can still end unquoted text (TX, lexer.textMatcher).
     ender: ':'
   })
 
+  // Get the Tin (Token id number) for #EL.
   let EL = jsonic.token('#EL')
-
 
   // console.log(jsonic.internal().config.fixed)
 
+  // Add a custom lex matcher for YAML special cases.
   jsonic.lex((_cfg: Config, _opts: Options) => {
 
-    return (lex: Lex) => {
+    return function yamlMatcher(lex: Lex) {
       let pnt = lex.pnt
       let fwd = lex.src.substring(pnt.sI)
 
+      // Yaml colons are ': ' and ':<newline>'.
       let colon = fwd.match(/^:( |\r?\n)/)
       if (colon) {
-        let len = colon[0].length
-        let tkn = lex.token('#CL', len, colon[0], lex.pnt)
-        pnt.sI += 1 // NOTE: don't consume newline! leave it for #IN
+        // NOTE: Don't consume newline! leave it for #IN, so it can match properly.
+        // Even though the match is <:\n> (say), only move point past the ':'.
+        // This is unusual - lex matchers normally consume the entire token string.
+        // (In the case ': ', the space will just get ignored).
+        let tkn = lex.token('#CL', 1, colon[0], lex.pnt)
+        pnt.sI += 1
+
         pnt.rI += ' ' != colon[1] ? 1 : 0
         pnt.cI += ' ' == colon[1] ? 2 : 0
         return tkn
       }
 
+      // Indentation is significant. This works because jsonic.lex
+      // inserts the matcher before existing matchers, so
+      // lexer.lineMatcher and lexer.spaceMatcher won't get a chance
+      // to incorrectly match an indent.
       let spaces = fwd.match(/^\r?\n +/)
       if (spaces) {
         let len = spaces[0].length
@@ -66,13 +82,22 @@ const Yaml: Plugin = (jsonic: Jsonic, options: YamlOptions) => {
     }
   })
 
+
+  // Amend val rule to handle indents and element markers.
   jsonic.rule('val', (rulespec: RuleSpec) => {
     rulespec.open([
       {
         s: [IN],
         p: 'indent',
+
+        // Set indent counter (`in`) to the size of the indent,
+        // which is #IN.val resolved by yamlMatcher by counting
+        // the number of spaces after a newline.
+        // TODO: fix start of file indent
         a: (rule: Rule) => rule.n.in = rule.open[0].val
       },
+
+      // This value is a list.
       {
         s: [EL],
         p: 'list',
@@ -80,24 +105,37 @@ const Yaml: Plugin = (jsonic: Jsonic, options: YamlOptions) => {
     ])
   })
 
+
+  // Add indent rule to handle initial indent.
   jsonic.rule('indent', (rulespec: RuleSpec) => {
     rulespec
       .open([
+        // Key pair, so this must be a map.
         {
           s: [TX, CL],
           p: 'map',
           b: 2,
         },
+
+        // Element, so this must be a list.
         {
           s: [EL],
           p: 'list',
         }
       ])
+
+      // Get the final value of the map or value.
       .bc((rule: Rule) => rule.node = rule.child.node)
   })
 
+
+  // Amend map rule, treating IN like CA. Indents act like
+  // commas in traditional JSON.
   jsonic.rule('map', (rulespec: RuleSpec) => {
     rulespec.open([
+
+      // Indent is a separator like comma, but only valid if
+      // same size as current indent level.
       {
         s: [IN],
         c: (rule: Rule) => rule.open[0].val === rule.n.in,
@@ -106,12 +144,16 @@ const Yaml: Plugin = (jsonic: Jsonic, options: YamlOptions) => {
     ])
   })
 
+
+  // Amend pair rule, treating IN like CA after pair.
   jsonic.rule('pair', (rulespec: RuleSpec) => {
     rulespec.close([
+
+      // Indent is a separator like comma, but only valid if
+      // same size as current indent level.      
       {
         s: [IN],
         c: (rule: Rule, ctx: Context) => {
-          // console.log('WWW',ctx.t0, rule.n)
           return ctx.t0.val === rule.n.in
         },
         r: 'pair',
@@ -119,16 +161,22 @@ const Yaml: Plugin = (jsonic: Jsonic, options: YamlOptions) => {
     ])
   })
 
+
+  // Amend elem rule, treating IN like CA after element.
   jsonic.rule('elem', (rulespec: RuleSpec) => {
     rulespec.close([
+
+      // Indent followed by element marker is a separator like comma,
+      // but only valid if same size as current indent level.
       {
         s: [IN, EL],
         c: (rule: Rule, ctx: Context) => {
-          // console.log('WWW',ctx.t0, rule.n)
           return ctx.t0.val === rule.n.in
         },
         r: 'elem',
       },
+
+      // Element marker at top level.
       {
         s: [EL],
         c: (rule: Rule, _ctx: Context) => {
