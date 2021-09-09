@@ -94,7 +94,7 @@ const Yaml: Plugin = (jsonic: Jsonic, options: YamlOptions) => {
         // which is #IN.val resolved by yamlMatcher by counting
         // the number of spaces after a newline.
         // TODO: fix start of file indent
-        a: (rule: Rule) => rule.n.in = rule.open[0].val
+        a: (rule: Rule) => rule.n.in = rule.o0.val
       },
 
       // This value is a list.
@@ -138,7 +138,7 @@ const Yaml: Plugin = (jsonic: Jsonic, options: YamlOptions) => {
       // same size as current indent level.
       {
         s: [IN],
-        c: (rule: Rule) => rule.open[0].val === rule.n.in,
+        c: (rule: Rule) => rule.o0.val === rule.n.in,
         r: 'pair',
       },
     ])
